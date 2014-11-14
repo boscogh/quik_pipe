@@ -1,7 +1,5 @@
 package hum.bosco.trade.quik.adapter;
 
-import hum.bosco.trade.quik.dealmakers.QuikAndTickerProperties;
-
 import java.io.Closeable;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -164,7 +162,7 @@ public class QuikCommandPipeAdapter implements Closeable {
 			System.out.println("ГО : " + adapter.getContractPrice("SPBFUT", "Si-12.14", false));
 //			adapter.getTradeDate(false);
 //			adapter.getServerCurrentHour(false);
-			System.out.println(adapter.getLastCandlesOf(QuikAndTickerProperties.current.classCode, QuikAndTickerProperties.current.tiker, Interval.HOUR, 50, false));
+			System.out.println(adapter.getLastCandlesOf("SPBFUT", "Si-12.14", Interval.HOUR, 50, false));
 			System.out.println("На всё ушло: " + (System.currentTimeMillis() - started));
 		}
 	}
