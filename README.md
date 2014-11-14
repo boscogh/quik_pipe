@@ -20,4 +20,5 @@ API для получения данных из Quik через Windows named pi
 			System.out.println("ГО : " + adapter.getContractPrice("SPBFUT", "Si-12.14", false));
 			// Последние Н (50) свечек
 			System.out.println(adapter.getLastCandlesOf("SPBFUT", "Si-12.14", Interval.HOUR, 50, false));
+		}
 
