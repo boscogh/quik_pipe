@@ -200,7 +200,7 @@ end
 -- главная нить, обрабатывает подключения клиента и запросы от него
 function main(  )
   log="C:\\Private\\lua\\робот.log"
-  handle = assert(ffi.C.CreateNamedPipeA("\\\\.\\pipe\\pvm.quik.pipe", 
+  handle = assert(ffi.C.CreateNamedPipeA("\\\\.\\pipe\\pmb.quik.pipe", 
 			PIPE_ACCESS_DUPLEX + FILE_FLAG_OVERLAPPED + FILE_FLAG_FIRST_PIPE_INSTANCE, 
 			PIPE_TYPE_MESSAGE + PIPE_READMODE_MESSAGE + PIPE_REJECT_REMOTE_CLIENTS, 
 			1, 
