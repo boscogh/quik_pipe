@@ -22,7 +22,6 @@ candleCount = 0
 last50CandlesAsString = ""
 
 function ds_getCandlesByIndex(ds,count)
-   -- параметр line игнорируется, т.к. у DataSource всегда одна линия
    local size=ds:Size()
    local t={}
    local first_candle = size - count+1
