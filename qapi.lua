@@ -12,15 +12,16 @@ Copyright (c) Pavel M Bosco, 2014
 *******************************************************************
 ]]
 
+mode = 0
 stopped = false
 f = nil
-s = ""
 cls = ""
 sec = ""
 cmd = ""
 response = ""
 candleCount = 0
 last50CandlesAsString = ""
+SERVER_NOT_CONNECTED = "not connected"
 
 function ds_getCandlesByIndex(ds,count)
    local size=ds:Size()
@@ -33,7 +34,9 @@ function ds_getCandlesByIndex(ds,count)
    if first_candle < 0 then
      first_candle = 0
    end
-   s = ""
+   --message("in func: " .. string.format("%d, %d, %d\n", first_candle, end_candle, count), 1)
+
+   local s = ""
    for i=first_candle,end_candle do
       j = i-first_candle
       t[j]={
@@ -53,20 +56,26 @@ end
 
 --колбек вызывается при получении нового стакана
 function OnQuote(cl, sc )
-  s = ""
-	if cl == cls and sc == sec then
-		ql2 = getQuoteLevel2(cls, sec)
-		for i=1,ql2.bid_count do
-			s = s.. string.format("%1.2f:%1.2f\n", ql2.bid[i].quantity, ql2.bid[i].price)
-		end
-		s = s .. "###\n"
-		for i=1,ql2.offer_count do
-			s = s.. string.format("%1.2f:%1.2f\n", ql2.offer[i].quantity, ql2.offer[i].price)
-		end
+        local s = ""
+	if cmd == "stakan" and cl == cls and sc == sec then
+           s = marshalStakan(cl, sc)
 	end
 	if cmd == "stakan" and string.len(s)>0 then
 	   response = s
 	end 
+end
+
+function marshalStakan(cl, sc)
+	local s = ""
+	ql2 = getQuoteLevel2(cls, sec)
+	for i=1,ql2.bid_count do
+		s = s.. string.format("%1.2f:%1.2f\n", ql2.bid[i].quantity, ql2.bid[i].price)
+	end
+	s = s .. "###\n"
+	for i=1,ql2.offer_count do
+		s = s.. string.format("%1.2f:%1.2f\n", ql2.offer[i].quantity, ql2.offer[i].price)
+	end
+        return s
 end
 
 -- вызывается при нажатии кнопки "остановить" в диалоге
@@ -110,7 +119,7 @@ ERROR_IO_PENDING = 997;
 ERROR_PIPE_CONNECTED = 535;                 
 PIPE_ACCESS_DUPLEX = 0x00000003;            
 PIPE_ACCESS_INBOUND = 0x00000001;           
-PIPE_ACCESS_OUTBOUND = 0x00000001;          
+PIPE_ACCESS_OUTBOUND = 0x00000002;          
 FILE_FLAG_FIRST_PIPE_INSTANCE = 0x00080000; 
 FILE_FLAG_OVERLAPPED = 0x40000000;          
 PIPE_TYPE_MESSAGE = 0x00000004;             
@@ -125,13 +134,41 @@ readBuffer = ffi.new("char [4*1024]")
 bytesRead = ffi.new("unsigned long[1]", 1)
 params = ""
 
+function OnConnected()
+ if mode == 0 then
+   disconnectAndReconnect(true)
+   message("Труба открыта", 1) 
+ end  
+end
+
+function OnClose()
+  if mode == 1 then
+     r = ffi.C.ReadFile(handle, readBuffer, 4*1024, bytesRead, nil);
+  end             
+  mode = 0
+  disconnectAndReconnect(false)
+end
+
+function OnDisconnected()
+  OnClose()
+  message("Труба закрыта", 1) 
+end
+
 function disconnectAndReconnect(doConnect)
+  ffi.C.FlushFileBuffers(handle)
   ffi.C.DisconnectNamedPipe(handle)
   if doConnect then
-    assert(ffi.C.ConnectNamedPipe(handle, poverlapped))
+    assert(ffi.C.ConnectNamedPipe(handle, poverlapped), "Соединение установить не удалось")
   end
 end
 
+function notEmpty(ss)
+  if ss == "" then
+    return SERVER_NOT_CONNECTED
+  else
+    return ss
+  end
+end
 
 function processCommand(request)
 --[[ 
@@ -142,7 +179,7 @@ function processCommand(request)
 5. устанавливаем команду
 ]]
   command = string.sub(request, 1, 3)
-  if command == "sta" then -- стакан
+  if command == "sta" or command == "sti" then -- sta - стакан после изменения, sti - стакан немедленно!
 --  2. выделяем параметры class code, sec code
     local ind = string.find(request,":",3,true)
     
@@ -150,7 +187,16 @@ function processCommand(request)
     sec = string.sub(request, 1+ind) 
     --message(string.format("Запрос стакана. Параметры: %s, %s", cls, sec), 1)
     response = ""
-    cmd = "stakan"
+    if command == "sta" then
+      cmd = "stakan"
+      if isConnected() == 1 then
+        cmd = "stakan"
+      else
+        response = SERVER_NOT_CONNECTED
+      end
+    else 
+        response = notEmpty(marshalStakan(cls, sec))
+    end
   end
   if command == "sve" then -- свеча
     --2. выделяем параметры class code, sec code, период, количество свечей 
@@ -171,7 +217,7 @@ function processCommand(request)
        ds:Close()
     end
 
-    response = last50CandlesAsString --""
+    response = notEmpty(last50CandlesAsString) --""
     --Если много свечей, то квик безбожно виснет
     --message("Ответ по графику: " .. last50CandlesAsString, 1)
     cmd = "svecha"
@@ -180,11 +226,11 @@ function processCommand(request)
     response = tostring(isConnected())
   end 
   if command == "stm" then -- время сервера, отвечаем сразу
-    response = getInfoParam("SERVERTIME")
+    response = notEmpty(getInfoParam("SERVERTIME"))
     --message("Ответ: " .. response, 1)
   end
   if command == "trd" then -- время сервера, отвечаем сразу
-    response = getInfoParam("TRADEDATE")
+    response = notEmpty(getInfoParam("TRADEDATE"))
     --message("Ответ: " .. response, 1)
   end
   if command == "go " then
@@ -192,7 +238,8 @@ function processCommand(request)
     cls = string.sub(request, 4, ind-1)
     sec = string.sub(request, 1+ind) 
     info = getParamEx(cls, sec, "BUYDEPO")
-    response = info.param_image
+   
+    response = notEmpty(info.param_image)
   end
 
 end
@@ -205,8 +252,8 @@ function main(  )
 			1, 
 			4*1024, 4*1024, 
 			0, nil))
-  assert(ffi.C.ConnectNamedPipe(handle, poverlapped))
-  mode = 0; -- подключаемся 
+  assert(ffi.C.ConnectNamedPipe(handle, poverlapped), "Проблемы с подключением к трубе!")
+  mode = 0; -- 0 - подключаемся и ждём клиента, 1 - читаем, 2 - пишем 
   --message("Запустились", 1)
   while not stopped do
     if mode == 0 then -- подключаемся
@@ -214,7 +261,11 @@ function main(  )
         --message("Клиент подключился", 1)
         mode = 1 -- пора читать
       else
-        sleep(5)
+        sleep(4)
+        if poverlapped[0].Internal ~= STATUS_PENDING then -- пока никого
+          --message("Клиент подключился", 1)
+          mode = 1 -- пора читать
+        end
       end 
     end 
     if mode == 1 then
@@ -247,4 +298,3 @@ function main(  )
   disconnectAndReconnect(false)
   ffi.C.CloseHandle(handle)
 end
-                                                  

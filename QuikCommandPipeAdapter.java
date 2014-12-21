@@ -3,8 +3,8 @@ package hum.bosco.trade.quik.adapter;
 import java.io.Closeable;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.text.NumberFormat;
-import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 
 import com.sun.jna.Native;
 import com.sun.jna.platform.win32.Kernel32;
@@ -14,14 +14,16 @@ import com.sun.jna.platform.win32.WinNT.HANDLE;
 import com.sun.jna.ptr.IntByReference;
 import com.sun.jna.win32.W32APIOptions;
 
+/*
+	Copyright (c) Pavel M Bosco, 2014
+*/
 public class QuikCommandPipeAdapter implements Closeable {
 	private HANDLE pipeHandle = WinNT.INVALID_HANDLE_VALUE;
-	PipesAPI kernel32;
-	
-	public QuikCommandPipeAdapter(){
-		// проблем с загрузкой ядра вообще-то быть не должно.
+	static PipesAPI kernel32 = init();
+	static PipesAPI init(){
+		// проблем с загрузкой ядра вообще-то быть недолжно.
 		System.setProperty("jna.encoding", "Cp1251");
-		kernel32 = (PipesAPI) Native.loadLibrary("kernel32", PipesAPI.class, W32APIOptions.UNICODE_OPTIONS);
+		return (PipesAPI) Native.loadLibrary("kernel32", PipesAPI.class, W32APIOptions.UNICODE_OPTIONS);
 	}
 
 	private void forceDisconnect(){
@@ -31,11 +33,12 @@ public class QuikCommandPipeAdapter implements Closeable {
 			//System.out.println("Закрыли трубу!");
 		}
 	}
+	
 	private boolean ensureConnected(){
 		if (pipeHandle != WinNT.INVALID_HANDLE_VALUE)
 			return true;
 		
-		int retryCount = 3;
+		int retryCount = 5;
 		while (pipeHandle == WinNT.INVALID_HANDLE_VALUE){
 			pipeHandle = kernel32.CreateFile(
 					"\\\\.\\pipe\\pmb.quik.pipe", 
@@ -46,20 +49,22 @@ public class QuikCommandPipeAdapter implements Closeable {
 					0, 
 					null);
 			int errorCode = kernel32.GetLastError();
-			if ((errorCode == 2 || errorCode == 231) && --retryCount < 0) // трубы нет или занята
-				return false;			
+			if (errorCode == 2 || errorCode == 231) {// трубы нет или занята
+				forceDisconnect();
+				if (--retryCount < 0) {
+//					System.out.println(errorCode);
+					return false;			
+				}
+			}
 		}
 		//System.out.println("Готово!");		
-		//DWORD mode = PipesAPI.PIPE_READMODE_MESSAGE;
-		//kernel32.SetNamedPipeHandleState(pipeHandle, new DWORDByReference(mode), null, null);
-		//System.out.println(kernel32.GetLastError());
+//		System.out.println(kernel32.GetLastError());
 		if (kernel32.GetLastError() != Kernel32.ERROR_SUCCESS){
 			forceDisconnect();
 			return false;
 		}
 		return true;
 	}
-	
 	public String executeRequest(String command, boolean doCloseConnection){
 		try{
 			//System.out.println("Соединяемся");
@@ -80,18 +85,25 @@ public class QuikCommandPipeAdapter implements Closeable {
 				IntByReference bytesRead = new IntByReference(buffer.capacity()); 
 				int lastError = 0;
 				//System.out.println("Начали читать..");
-				while (!(kernel32.ReadFile(pipeHandle, buffer, buffer.capacity(), bytesRead, null)) 
-						|| (lastError=kernel32.GetLastError()) == Kernel32.ERROR_MORE_DATA){
-					// читаем и читаем
-					if (lastError == Kernel32.ERROR_PIPE_NOT_CONNECTED )
-						break;
-				}
+				
+				//проверим, чтобы не зависнуть 
+				if (kernel32.PeekNamedPipe(pipeHandle, buffer, buffer.capacity(), bytesRead, null, null))
+					while (!(kernel32.ReadFile(pipeHandle, buffer, buffer.capacity(), bytesRead, overlapped)) 
+							|| (lastError=kernel32.GetLastError()) == Kernel32.ERROR_MORE_DATA){
+						// читаем и читаем
+						if (lastError == Kernel32.ERROR_PIPE_NOT_CONNECTED || overlapped.Internal.intValue() != WinNT.ERROR_IO_PENDING)
+							break;
+					}
+
 				//System.out.println("Считали: " + bytesRead.getValue() + " байт");
 				if (doCloseConnection){
 					forceDisconnect();
 				}
 				String result = new String(buffer.array(), 0, bytesRead.getValue());
 				//System.out.println("Quik pipe -> : " + result);
+
+				if ("not connected".equals(result))
+					return null;
 				return result;
 			} else{
 				//System.out.println("Quik Pipe cоединение не может быть установлено. Вероятно сервер выключен");
@@ -152,18 +164,39 @@ public class QuikCommandPipeAdapter implements Closeable {
 	}
 			
 
-	public static void main(String s[]) throws IOException{
+	public static void main(String s[]) throws Exception{
+		SimpleDateFormat fmt = new SimpleDateFormat("dd.MM.yyyy");
+
+		for (int i=0;i<10000000;i++)
 		try(QuikCommandPipeAdapter adapter = new QuikCommandPipeAdapter()) {
-			long started = System.currentTimeMillis();
-			System.out.println(adapter.isConnectedToServer(false));
-			System.out.println(adapter.getTradeDate(false));
-			System.out.println(adapter.executeRequest("staSPBFUT:Si-12.14", false));
-			System.out.println(adapter.getServerCurrentTime(false).replaceAll(":", ""));
-			System.out.println("ГО : " + adapter.getContractPrice("SPBFUT", "Si-12.14", false));
-//			adapter.getTradeDate(false);
-//			adapter.getServerCurrentHour(false);
-			System.out.println(adapter.getLastCandlesOf("SPBFUT", "Si-12.14", Interval.HOUR, 50, false));
-			System.out.println("На всё ушло: " + (System.currentTimeMillis() - started));
+
+
+			Thread.sleep(10);
+
+			if (adapter.isConnectedToServer(false)){
+				long started = System.currentTimeMillis();
+				// торговый день должен быть - СЕГОДНЯ
+				String theDate = fmt.format(new Date());
+				String tradeDate = adapter.getTradeDate(false);
+				System.out.println(true);
+				System.out.println(tradeDate);
+				if (theDate.equals(tradeDate)){ // да, значит торги ведутся
+					String serverTime = adapter.getServerCurrentTime(false).replaceAll(":", ""); 
+					System.out.println(serverTime);
+//					System.out.println(adapter.executeRequest("stiEQBREMU:SBER03", false));
+					System.out.println(adapter.getServerCurrentTime(false).replaceAll(":", ""));
+					//System.out.println("ГО : " + adapter.getContractPrice("SPBFUT", "Si-12.14", false));
+//					System.out.println("ГО : " + adapter.getContractPrice("EQBREMU", "SBER03", false));
+
+		//			adapter.getTradeDate(false);
+		//			adapter.getServerCurrentHour(false);
+					System.out.println(adapter.getLastCandlesOf("SPBFUT", "Si-12.14", Interval.HOUR, 5, false));
+					System.out.println("На всё ушло: " + (System.currentTimeMillis() - started));
+				}
+			} else
+				System.out.println(false);
 		}
+
+
 	}
 }
